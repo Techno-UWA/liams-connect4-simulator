@@ -4,6 +4,7 @@ var response_received := false
 var times_up := false
 var player_timer: SceneTreeTimer
 signal turn_completed
+signal game_state_changed
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
@@ -83,6 +84,78 @@ func _process_turn_results(timer_finish, response, response_time_ms):
 		
 		print('Your bot sucessfully selected column %s and said "%s"'%[selected_column, response[1]])
 		return true
+
+func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
+	var empty_grid: Array[int] = []
+	empty_grid.resize(7 * 6)
+	empty_grid.fill(0)
+	var grid_state: Array[int] = empty_grid.duplicate()
+	var game_data = C4GameData.new("Player 1", grid_state, null)
+	var active_player = 0
+	var bot_functions = [bot_function_1, bot_function_2]
+
+	while true:
+		var bot_function = bot_functions[active_player]
+		var turn_result = test_bot(bot_function, game_data.player_names[active_player])
+		if turn_result:
+			var selected_column = turn_result[0]
+			var message = turn_result[1]
+			var row = _get_next_available_row(grid_state, selected_column)
+			if row != -1:
+				grid_state[row * 7 + selected_column] = active_player + 1
+				game_data.grid = grid_state
+				game_data.my_grid = _change_slot_state_perspective(grid_state, active_player)
+				game_data.game_history.append(C4Turn.new(active_player, row * 7 + selected_column, message, game_data))
+				emit_signal("game_state_changed", grid_state)
+
+				if check_win_condition(grid_state, active_player + 1):
+					print("Player %d wins!" % (active_player + 1))
+					break
+
+				if check_draw_condition(grid_state):
+					print("The game is a draw!")
+					break
+
+				active_player = 1 - active_player
+
+func check_win_condition(grid_state: Array[int], player_token: int) -> bool:
+	var directions = [
+		Vector2(1, 0),  # Horizontal
+		Vector2(0, 1),  # Vertical
+		Vector2(1, 1),  # Diagonal /
+		Vector2(1, -1)  # Diagonal \
+	]
+
+	for y in range(6):
+		for x in range(7):
+			if grid_state[y * 7 + x] == player_token:
+				for direction in directions:
+					var count = 1
+					for i in range(1, 4):
+						var new_x = x + direction.x * i
+						var new_y = y + direction.y * i
+						if new_x >= 0 and new_x < 7 and new_y >= 0 and new_y < 6:
+							if grid_state[new_y * 7 + new_x] == player_token:
+								count += 1
+							else:
+								break
+						else:
+							break
+					if count == 4:
+						return true
+	return false
+
+func check_draw_condition(grid_state: Array[int]) -> bool:
+	for slot in grid_state:
+		if slot == 0:
+			return false
+	return true
+
+func _get_next_available_row(grid_state: Array[int], column: int) -> int:
+	for row in range(5, -1, -1):
+		if grid_state[row * 7 + column] == 0:
+			return row
+	return -1
 
 class C4Turn:
 	func _init(player_index, selected_slot:int, chat_message: String, game_data: C4GameData):
