@@ -8,11 +8,20 @@ var player_timer: SceneTreeTimer
 signal turn_completed
 signal game_state_changed
 
+# Import bot scripts
+const C4BotRandom = preload("res://scripts/bots/c4_bot_random.gd")
+const C4BotBadResponse = preload("res://scripts/bots/c4_bot_bad_response.gd")
+const C4BotInvalidColumn = preload("res://scripts/bots/c4_bot_invalid_column.gd")
+const C4BotBadMessage = preload("res://scripts/bots/c4_bot_bad_message.gd")
+const C4BotTooSlow = preload("res://scripts/bots/c4_bot_too_slow.gd")
+const C4BotSlow = preload("res://scripts/bots/c4_bot_slow.gd")
+const C4BotAlphaBeta = preload("res://scripts/bots/c4_bot_alpha_beta.gd")
+
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	randomize()  # Initialize the random number generator
-	var bot_function_1 = Callable(self, "c4_bot_alpha_beta")  # Alpha-beta bot
-	var bot_function_2 = Callable(self, "c4_bot_random")      # Random bot
+	var bot_function_1 = Callable(C4BotAlphaBeta, "c4_bot_alpha_beta")  # Alpha-beta bot
+	var bot_function_2 = Callable(C4BotRandom, "c4_bot_random")      # Random bot
 	play_full_game(bot_function_1, bot_function_2)
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -177,10 +186,12 @@ func _get_next_available_row(grid_state: Array[int], column: int) -> int:
 	return -1
 
 class C4Turn:
-	var player: int
-	var selection: int
-	var message: String
-	var provided_data: C4GameData
+	var number: int #First player's first turn is 1, 2nd player's first turn is 2 etc.
+	var player_index: int #0 = first player, 1 = second player
+	var selection:int #The selected grid slot => -1 if an invalid slot was selected, -2 if they ran out of time otherwise 0 to 41(in normal 6x7 grid)
+	var message:String #The message given by the player, empty string if no response
+	var game_data:C4GameData #the data given to the player as part of their turn
+	var time_used_ms: int #the thinking time used by the turn
 
 	func _init(player_index: int, selected_column: int, chat_message: String, game_data: C4GameData):
 		player = player_index
@@ -194,17 +205,22 @@ class C4Turn:
 		return new_turn
 
 class C4GameData:
-	var player_names: Array
-	var columns: int = 7
-	var rows: int = 6
-	var required_connections: int = 4
-	var allowed_time_ms: int = 10000
+	var columns:int #The number of columns of the grid
+	var rows: int #The number of rows of the grid
+	var required_connections: int #The number of connected tokens required to win (normally 4)
+	var allowed_time_ms: int #The total allowed thinking time for each player
+	
+	var grid:Array[int] #Current game grid 0 = Empty, 1 = Player 1 token, 2 = Player 2 token. 0 is top left slot, goes left-right, top-bottom
+	var game_history: Array[C4Turn] #Array holding all the previous turns
+	var my_remaining_time_s:float #Your total remaining thinking time in s
+	var my_player_index:int #0 if first player, 1 if second player
+	var my_opponent_name: String #Your opponent's display name
+	var my_name: String #Your display name
+	var my_remaining_time_ms: int #Your total remaining thinking time in ms
 
-	var my_player_index: int
-	var my_remaining_time_ms: int = 2000
-	var grid: Array
-	var my_grid: Array
-	var game_history: Array
+	var my_grid: Array[int] #Current game grid but changed to 0= empty, 1= your token, 2= your opponents tokken
+	var my_color:Color #Colour of your tokens
+	var my_opponent_color:Color #Colour of your opponents tokens
 
 	func _init(player_names: Array, grid_state: Array, first_turn):
 		self.player_names = player_names
@@ -239,193 +255,6 @@ class C4GameData:
 			else:
 				grid.append(1)
 		return grid
-
-
-# Test Bots
-func c4_bot_random(game_data: C4GameData):
-	var slot_picked = randi_range(0, game_data.columns - 1)
-	var message = 'Randy picks: Column %s'%(slot_picked + 1)
-	return [slot_picked, message]
-
-func c4_bot_bad_response(game_data: C4GameData):
-	return 'No'
-
-func c4_bot_invalid_column(game_data: C4GameData):
-	return [-1, "I don't know what I'm doing"]
-
-func c4_bot_bad_message(game_data: C4GameData):
-	return [3, 4]
-
-func c4_bot_too_slow(game_data: C4GameData):
-	await get_tree().create_timer(3).timeout
-	return [2, "Decisions are hard"]
-
-func c4_bot_slow(game_data: C4GameData):
-	await get_tree().create_timer(1).timeout
-	return [2, "Sorry it took so long"]
-
-func c4_bot_alpha_beta(game_data: C4GameData):
-	var depth = 5  # Adjust the depth for difficulty
-	var player = game_data.my_player_index + 1  # Player token (1 or 2)
-
-	var valid_columns = []
-	for col in range(game_data.columns):
-		if _get_next_available_row(game_data.grid, col) != -1:
-			valid_columns.append(col)
-	if valid_columns.size() == 0:
-		return null  # No valid moves
-
-	var result = _alpha_beta_search(game_data.grid, depth, -INF, INF, true, player)
-	var score = result[0]
-	var column = result[1]
-
-	if column == null:
-		column = valid_columns[0]  # Fallback if no column was selected
-
-	var message = 'Alpha-Beta chooses: Column %s' % (column + 1)
-	return [column, message]
-
-func _alpha_beta_search(grid, depth, alpha, beta, maximizing_player, player):
-	var valid_columns = []
-	for col in range(7):
-		if _get_next_available_row(grid, col) != -1:
-			valid_columns.append(col)
-	var is_terminal = _is_terminal_node(grid)
-
-	if depth == 0 or is_terminal:
-		if is_terminal:
-			if _winning_move(grid, player):
-				return [100000000000000, null]
-			elif _winning_move(grid, 3 - player):
-				return [-100000000000000, null]
-			else:
-				return [0, null]
-		else:
-			return [_score_position(grid, player), null]
-
-	if maximizing_player:
-		var value = -INF
-		var column = null
-		for col in valid_columns:
-			var row = _get_next_available_row(grid, col)
-			var temp_grid = grid.duplicate()
-			temp_grid[row * 7 + col] = player
-			var new_score = _alpha_beta_search(temp_grid, depth - 1, alpha, beta, false, player)[0]
-			if new_score > value:
-				value = new_score
-				column = col
-			alpha = max(alpha, value)
-			if alpha >= beta:
-				break
-		return [value, column]
-	else:
-		var value = INF
-		var column = null
-		for col in valid_columns:
-			var row = _get_next_available_row(grid, col)
-			var temp_grid = grid.duplicate()
-			temp_grid[row * 7 + col] = 3 - player  # Opponent's token
-			var new_score = _alpha_beta_search(temp_grid, depth - 1, alpha, beta, true, player)[0]
-			if new_score < value:
-				value = new_score
-				column = col
-			beta = min(beta, value)
-			if alpha >= beta:
-				break
-		return [value, column]
-
-func _is_terminal_node(grid) -> bool:
-	return _winning_move(grid, 1) or _winning_move(grid, 2) or _get_valid_locations(grid).size() == 0
-
-func _get_valid_locations(grid) -> Array:
-	var valid_locations = []
-	for col in range(7):
-		if _get_next_available_row(grid, col) != -1:
-			valid_locations.append(col)
-	return valid_locations
-
-func _winning_move(grid, piece) -> bool:
-	# Check horizontal locations
-	for r in range(6):
-		for c in range(4):
-			if grid[r * 7 + c] == piece and grid[r * 7 + c + 1] == piece and grid[r * 7 + c + 2] == piece and grid[r * 7 + c + 3] == piece:
-				return true
-	# Check vertical locations
-	for c in range(7):
-		for r in range(3):
-			if grid[r * 7 + c] == piece and grid[(r + 1) * 7 + c] == piece and grid[(r + 2) * 7 + c] == piece and grid[(r + 3) * 7 + c] == piece:
-				return true
-	# Check positively sloped diagonals
-	for r in range(3):
-		for c in range(4):
-			if grid[r * 7 + c] == piece and grid[(r + 1) * 7 + c + 1] == piece and grid[(r + 2) * 7 + c + 2] == piece and grid[(r + 3) * 7 + c + 3] == piece:
-				return true
-	# Check negatively sloped diagonals
-	for r in range(3, 6):
-		for c in range(4):
-			if grid[r * 7 + c] == piece and grid[(r - 1) * 7 + c + 1] == piece and grid[(r - 2) * 7 + c + 2] == piece and grid[(r - 3) * 7 + c + 3] == piece:
-				return true
-	return false
-
-func _score_position(grid, piece) -> int:
-	var score = 0
-	# Center column preference
-	var center_array = []
-	for r in range(6):
-		center_array.append(grid[r * 7 + 3])
-	var center_count = center_array.count(piece)
-	score += center_count * 3
-
-	# Horizontal scoring
-	for r in range(6):
-		var row_array = []
-		for c in range(7):
-			row_array.append(grid[r * 7 + c])
-		for c in range(4):
-			var window = row_array.slice(c, c + 4)
-			score += _evaluate_window(window, piece)
-	# Vertical scoring
-	for c in range(7):
-		var col_array = []
-		for r in range(6):
-			col_array.append(grid[r * 7 + c])
-		for r in range(3):
-			var window = col_array.slice(r, r + 4)
-			score += _evaluate_window(window, piece)
-	# Positive sloped diagonal scoring
-	for r in range(3):
-		for c in range(4):
-			var window = []
-			for i in range(4):
-				window.append(grid[(r + i) * 7 + c + i])
-			score += _evaluate_window(window, piece)
-	# Negative sloped diagonal scoring
-	for r in range(3, 6):
-		for c in range(4):
-			var window = []
-			for i in range(4):
-				window.append(grid[(r - i) * 7 + c + i])
-			score += _evaluate_window(window, piece)
-	return score
-
-func _evaluate_window(window: Array, piece) -> int:
-	var score = 0
-	var opp_piece = 3 - piece
-
-	var count_piece = window.count(piece)
-	var count_opp = window.count(opp_piece)
-	var count_empty = window.count(0)
-
-	if count_piece == 4:
-		score += 100
-	elif count_piece == 3 and count_empty == 1:
-		score += 5
-	elif count_piece == 2 and count_empty == 2:
-		score += 2
-
-	if count_opp == 3 and count_empty == 1:
-		score -= 4
-	return score
 
 func print_board(grid_state: Array) -> void:
 	print("\n Current Board State:")

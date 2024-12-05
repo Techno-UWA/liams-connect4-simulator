@@ -2,10 +2,19 @@ extends Node2D
 
 signal game_state_changed
 
+# Import bot scripts
+const C4BotRandom = preload("res://scripts/bots/c4_bot_random.gd")
+const C4BotBadResponse = preload("res://scripts/bots/c4_bot_bad_response.gd")
+const C4BotInvalidColumn = preload("res://scripts/bots/c4_bot_invalid_column.gd")
+const C4BotBadMessage = preload("res://scripts/bots/c4_bot_bad_message.gd")
+const C4BotTooSlow = preload("res://scripts/bots/c4_bot_too_slow.gd")
+const C4BotSlow = preload("res://scripts/bots/c4_bot_slow.gd")
+const C4BotAlphaBeta = preload("res://scripts/bots/c4_bot_alpha_beta.gd")
+
 func _ready():
 	randomize()  # Initialize random number generator
-	var bot_function_1 = Callable(self, "c4_bot_random")
-	var bot_function_2 = Callable(self, "c4_bot_random")
+	var bot_function_1 = Callable(C4BotRandom, "c4_bot_random")
+	var bot_function_2 = Callable(C4BotRandom, "c4_bot_random")
 	play_full_game(bot_function_1, bot_function_2)
 
 func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
@@ -133,31 +142,3 @@ class C4Turn:
 	func duplicate():
 		var new_turn = C4Turn.new(player, selection, message, provided_data)
 		return new_turn
-
-func c4_bot_random(game_data: C4GameData):
-	var valid_columns = []
-	for col in range(game_data.columns):
-		if _get_next_available_row(game_data.grid, col) != -1:
-			valid_columns.append(col)
-	if valid_columns.size() == 0:
-		return null  # No valid moves
-	var slot_picked = valid_columns[randi() % valid_columns.size()]
-	var message = 'Random choice: Column %s' % (slot_picked + 1)
-	return [slot_picked, message]
-
-func c4_bot_bad_response(game_data:C4GameData):
-	return 'No'
-
-func c4_bot_invalid_column(game_data:C4GameData):
-	return [-1, "Idk what I'm doing"]
-
-func c4_bot_bad_message(game_data:C4GameData):
-	return [3, 4]
-	
-func c4_bot_too_slow(game_data:C4GameData):
-	await get_tree().create_timer(3).timeout
-	return [2, "Decisions are hard"]
-
-func c4_bot_slow(game_data:C4GameData):
-	await get_tree().create_timer(1).timeout
-	return [2, "Sorry it took so long"]
