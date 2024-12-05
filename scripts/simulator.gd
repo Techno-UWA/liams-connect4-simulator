@@ -1,5 +1,7 @@
 extends Node2D
 
+const INF = 1e20  # A large number to represent infinity
+
 var response_received := false
 var times_up := false
 var player_timer: SceneTreeTimer
@@ -8,10 +10,10 @@ signal game_state_changed
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
-	var bot_function = Callable(self, "c4_bot_random")
-	test_bot(bot_function, "Tester")
-	pass # Replace with function body.
-
+	randomize()  # Initialize the random number generator
+	var bot_function_1 = Callable(self, "c4_bot_alpha_beta")  # Alpha-beta bot
+	var bot_function_2 = Callable(self, "c4_bot_random")      # Random bot
+	play_full_game(bot_function_1, bot_function_2)
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta: float) -> void:
@@ -28,61 +30,60 @@ func test_bot(bot_function: Callable, your_bot_name: String): #Simulates calling
 	empty_grid.fill(0)
 	var grid_state: Array[int] = empty_grid.duplicate()
 	grid_state[38] = 1
-	
-	var game_data_first_turn = C4GameData.new(your_bot_name, grid_state, null)
+
+	var player_names = [your_bot_name]
+	var game_data_first_turn = C4GameData.new(player_names, grid_state, null)
 	var first_turn = C4Turn.new(0, 38, "Let's Go!", game_data_first_turn)
-	var game_data = C4GameData.new(your_bot_name, grid_state, first_turn)
+	var game_data = C4GameData.new(player_names, grid_state, first_turn)
 
 	player_timer = get_tree().create_timer(game_data.my_remaining_time_ms / 1000)
 	player_timer.timeout.connect(_turn_time_exceeded)
 	_get_bots_response(bot_function, game_data)
-	
-	
-	
-func _get_bots_response(bot_function, game_data:C4GameData):
+
+func _get_bots_response(bot_function, game_data: C4GameData):
 	var turn_start_time = Time.get_ticks_msec()
 	var response = await bot_function.call(game_data)
 	var response_time_ms = Time.get_ticks_msec() - turn_start_time
 	turn_completed.emit(false, response, response_time_ms)
 
 func _turn_time_exceeded():
-	turn_completed.emit(true,'Times Up',2000)
+	turn_completed.emit(true, 'Times Up', 2000)
 
 func _process_turn_results(timer_finish, response, response_time_ms):
 	if timer_finish and not response_received:
 		times_up = true
 		print('You ran out of time, your turn would be skipped')
-	
+
 	elif not timer_finish and not times_up:
 		response_received = true
 		print('You gave us:')
 		print(response)
 		print('It took %sms'%response_time_ms)
-		
+
 		if not response is Array:
 			print('You need to give back an array')
 			print('The game will skip your turn')
 			return false
-		
+
 		if not response[0] is int:
 			print('The first element in your response array must be an integer')
 			print('The game will skip your turn')
 			return false
-		
+
 		if not (response[0] >= 0 and response[0] < 7):
 			print('The first element in your response array should be between 0 and 6 inclusive')
 			print('The game will skip your turn')
 			return false
-		
+
 		var selected_column = response[0] + 1
-		
+
 		if not response[1] is String:
 			print('The second element in your response array should be a string')
 			print('The game will keep your selection of column %s and leave your chat message blank'%selected_column)
 			return true
-		
-		
-		print('Your bot sucessfully selected column %s and said "%s"'%[selected_column, response[1]])
+
+
+		print('Your bot successfully selected column %s and said "%s"'%[selected_column, response[1]])
 		return true
 
 func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
@@ -90,26 +91,36 @@ func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
 	empty_grid.resize(7 * 6)
 	empty_grid.fill(0)
 	var grid_state: Array[int] = empty_grid.duplicate()
-	var game_data = C4GameData.new("Player 1", grid_state, null)
 	var active_player = 0
 	var bot_functions = [bot_function_1, bot_function_2]
+	var player_names = ["Player 1", "Player 2"]
 
+	var game_data = C4GameData.new(player_names, grid_state, null)
+	print_board(grid_state)  # Print initial empty board
+	
 	while true:
 		var bot_function = bot_functions[active_player]
-		var turn_result = test_bot(bot_function, game_data.player_names[active_player])
+		game_data.my_player_index = active_player
+		game_data.my_grid = C4GameData._change_slot_state_perspective(grid_state, active_player)
+
+		var turn_result = bot_function.call(game_data)
+
 		if turn_result:
 			var selected_column = turn_result[0]
 			var message = turn_result[1]
 			var row = _get_next_available_row(grid_state, selected_column)
 			if row != -1:
 				grid_state[row * 7 + selected_column] = active_player + 1
-				game_data.grid = grid_state
-				game_data.my_grid = _change_slot_state_perspective(grid_state, active_player)
-				game_data.game_history.append(C4Turn.new(active_player, row * 7 + selected_column, message, game_data))
+				game_data.grid = grid_state.duplicate()
+				game_data.game_history.append(C4Turn.new(active_player, selected_column, message, game_data))
 				emit_signal("game_state_changed", grid_state)
 
+				print("Player %d (%s) selects column %d and says: \"%s\"" %
+					[active_player + 1, player_names[active_player], selected_column + 1, message])
+				print_board(grid_state)  # Print board after each move
+
 				if check_win_condition(grid_state, active_player + 1):
-					print("Player %d wins!" % (active_player + 1))
+					print("Player %d (%s) wins!" % [active_player + 1, player_names[active_player]])
 					break
 
 				if check_draw_condition(grid_state):
@@ -117,6 +128,13 @@ func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
 					break
 
 				active_player = 1 - active_player
+			else:
+				print("Column %d is full. Player %d (%s) loses." %
+					[selected_column + 1, active_player + 1, player_names[active_player]])
+				break
+		else:
+			print("Player %d (%s) did not return a valid move." % [active_player + 1, player_names[active_player]])
+			break
 
 func check_win_condition(grid_state: Array[int], player_token: int) -> bool:
 	var directions = [
@@ -135,7 +153,7 @@ func check_win_condition(grid_state: Array[int], player_token: int) -> bool:
 						var new_x = x + direction.x * i
 						var new_y = y + direction.y * i
 						if new_x >= 0 and new_x < 7 and new_y >= 0 and new_y < 6:
-							if grid_state[new_y * 7 + new_x] == player_token:
+							if grid_state[int(new_y) * 7 + int(new_x)] == player_token:
 								count += 1
 							else:
 								break
@@ -152,45 +170,66 @@ func check_draw_condition(grid_state: Array[int]) -> bool:
 	return true
 
 func _get_next_available_row(grid_state: Array[int], column: int) -> int:
+	# Start from bottom (row 0) and go up
 	for row in range(5, -1, -1):
 		if grid_state[row * 7 + column] == 0:
 			return row
 	return -1
 
 class C4Turn:
-	func _init(player_index, selected_slot:int, chat_message: String, game_data: C4GameData):
-		var player: int = player_index
-		var selection:int = selected_slot #-1 if turn was skipped
-		var message:String = chat_message #Empty string if no or invalid message
-		var provided_data:C4GameData = game_data.duplicate()
+	var player: int
+	var selection: int
+	var message: String
+	var provided_data: C4GameData
+
+	func _init(player_index: int, selected_column: int, chat_message: String, game_data: C4GameData):
+		player = player_index
+		selection = selected_column
+		message = chat_message
+		provided_data = game_data.duplicate()
+
+	# Add this duplicate method
+	func duplicate():
+		var new_turn = C4Turn.new(player, selection, message, provided_data.duplicate())
+		return new_turn
 
 class C4GameData:
-	#The actual class constructor sets these from the tournament UI.
-	var player_names:Array[String] = ['Player 1']
-	var columns:int = 7
+	var player_names: Array
+	var columns: int = 7
 	var rows: int = 6
 	var required_connections: int = 4
-	var allowed_time_ms:int = 10000
-	
-	var my_player_index:int = 1 #0 if first, 1 if second player
-	var my_remaining_time_ms: int = 2000
-	var grid:Array[int]
-	var my_grid: Array[int] #grid changed to 0 empty, 1 your token, 2 your opponents token
-	var game_history: Array[C4Turn]
-	
-		
-	func _init(bot_name, grid_state, first_turn):
-		player_names.append(bot_name)
-		grid = grid_state
-		my_grid = _change_slot_state_perspective(grid_state, my_player_index)
-		game_history = [first_turn]
-		
-	
-	func duplicate():
-		#This is a hack for the benefits of this test code
-		return C4GameData.new(player_names[1], grid, game_history[0])
+	var allowed_time_ms: int = 10000
 
-	func _change_slot_state_perspective(grid_state:Array[int], player_index:int):
+	var my_player_index: int
+	var my_remaining_time_ms: int = 2000
+	var grid: Array
+	var my_grid: Array
+	var game_history: Array
+
+	func _init(player_names: Array, grid_state: Array, first_turn):
+		self.player_names = player_names
+		self.grid = grid_state.duplicate()
+		self.my_grid = []
+		self.game_history = []
+		if first_turn != null:
+			self.game_history.append(first_turn)
+
+	# Add this duplicate method
+	func duplicate():
+		var new_instance = C4GameData.new(player_names.duplicate(), grid.duplicate(), null)
+		new_instance.columns = columns
+		new_instance.rows = rows
+		new_instance.required_connections = required_connections
+		new_instance.allowed_time_ms = allowed_time_ms
+		new_instance.my_player_index = my_player_index
+		new_instance.my_remaining_time_ms = my_remaining_time_ms
+		new_instance.my_grid = my_grid.duplicate()
+		new_instance.game_history = []
+		for turn in game_history:
+			new_instance.game_history.append(turn.duplicate())
+		return new_instance
+
+	static func _change_slot_state_perspective(grid_state:Array[int], player_index:int):
 		var grid:Array[int] = []
 		for slot in grid_state:
 			if player_index==0 or slot == 0:
@@ -203,24 +242,205 @@ class C4GameData:
 
 
 # Test Bots
-func c4_bot_random(game_data:C4GameData):
+func c4_bot_random(game_data: C4GameData):
 	var slot_picked = randi_range(0, game_data.columns - 1)
 	var message = 'Randy picks: Column %s'%(slot_picked + 1)
 	return [slot_picked, message]
 
-func c4_bot_bad_response(game_data:C4GameData):
+func c4_bot_bad_response(game_data: C4GameData):
 	return 'No'
 
-func c4_bot_invalid_column(game_data:C4GameData):
-	return [-1, "Idk what I'm doing"]
+func c4_bot_invalid_column(game_data: C4GameData):
+	return [-1, "I don't know what I'm doing"]
 
-func c4_bot_bad_message(game_data:C4GameData):
+func c4_bot_bad_message(game_data: C4GameData):
 	return [3, 4]
-	
-func c4_bot_too_slow(game_data:C4GameData):
+
+func c4_bot_too_slow(game_data: C4GameData):
 	await get_tree().create_timer(3).timeout
 	return [2, "Decisions are hard"]
 
-func c4_bot_slow(game_data:C4GameData):
+func c4_bot_slow(game_data: C4GameData):
 	await get_tree().create_timer(1).timeout
 	return [2, "Sorry it took so long"]
+
+func c4_bot_alpha_beta(game_data: C4GameData):
+	var depth = 5  # Adjust the depth for difficulty
+	var player = game_data.my_player_index + 1  # Player token (1 or 2)
+
+	var valid_columns = []
+	for col in range(game_data.columns):
+		if _get_next_available_row(game_data.grid, col) != -1:
+			valid_columns.append(col)
+	if valid_columns.size() == 0:
+		return null  # No valid moves
+
+	var result = _alpha_beta_search(game_data.grid, depth, -INF, INF, true, player)
+	var score = result[0]
+	var column = result[1]
+
+	if column == null:
+		column = valid_columns[0]  # Fallback if no column was selected
+
+	var message = 'Alpha-Beta chooses: Column %s' % (column + 1)
+	return [column, message]
+
+func _alpha_beta_search(grid, depth, alpha, beta, maximizing_player, player):
+	var valid_columns = []
+	for col in range(7):
+		if _get_next_available_row(grid, col) != -1:
+			valid_columns.append(col)
+	var is_terminal = _is_terminal_node(grid)
+
+	if depth == 0 or is_terminal:
+		if is_terminal:
+			if _winning_move(grid, player):
+				return [100000000000000, null]
+			elif _winning_move(grid, 3 - player):
+				return [-100000000000000, null]
+			else:
+				return [0, null]
+		else:
+			return [_score_position(grid, player), null]
+
+	if maximizing_player:
+		var value = -INF
+		var column = null
+		for col in valid_columns:
+			var row = _get_next_available_row(grid, col)
+			var temp_grid = grid.duplicate()
+			temp_grid[row * 7 + col] = player
+			var new_score = _alpha_beta_search(temp_grid, depth - 1, alpha, beta, false, player)[0]
+			if new_score > value:
+				value = new_score
+				column = col
+			alpha = max(alpha, value)
+			if alpha >= beta:
+				break
+		return [value, column]
+	else:
+		var value = INF
+		var column = null
+		for col in valid_columns:
+			var row = _get_next_available_row(grid, col)
+			var temp_grid = grid.duplicate()
+			temp_grid[row * 7 + col] = 3 - player  # Opponent's token
+			var new_score = _alpha_beta_search(temp_grid, depth - 1, alpha, beta, true, player)[0]
+			if new_score < value:
+				value = new_score
+				column = col
+			beta = min(beta, value)
+			if alpha >= beta:
+				break
+		return [value, column]
+
+func _is_terminal_node(grid) -> bool:
+	return _winning_move(grid, 1) or _winning_move(grid, 2) or _get_valid_locations(grid).size() == 0
+
+func _get_valid_locations(grid) -> Array:
+	var valid_locations = []
+	for col in range(7):
+		if _get_next_available_row(grid, col) != -1:
+			valid_locations.append(col)
+	return valid_locations
+
+func _winning_move(grid, piece) -> bool:
+	# Check horizontal locations
+	for r in range(6):
+		for c in range(4):
+			if grid[r * 7 + c] == piece and grid[r * 7 + c + 1] == piece and grid[r * 7 + c + 2] == piece and grid[r * 7 + c + 3] == piece:
+				return true
+	# Check vertical locations
+	for c in range(7):
+		for r in range(3):
+			if grid[r * 7 + c] == piece and grid[(r + 1) * 7 + c] == piece and grid[(r + 2) * 7 + c] == piece and grid[(r + 3) * 7 + c] == piece:
+				return true
+	# Check positively sloped diagonals
+	for r in range(3):
+		for c in range(4):
+			if grid[r * 7 + c] == piece and grid[(r + 1) * 7 + c + 1] == piece and grid[(r + 2) * 7 + c + 2] == piece and grid[(r + 3) * 7 + c + 3] == piece:
+				return true
+	# Check negatively sloped diagonals
+	for r in range(3, 6):
+		for c in range(4):
+			if grid[r * 7 + c] == piece and grid[(r - 1) * 7 + c + 1] == piece and grid[(r - 2) * 7 + c + 2] == piece and grid[(r - 3) * 7 + c + 3] == piece:
+				return true
+	return false
+
+func _score_position(grid, piece) -> int:
+	var score = 0
+	# Center column preference
+	var center_array = []
+	for r in range(6):
+		center_array.append(grid[r * 7 + 3])
+	var center_count = center_array.count(piece)
+	score += center_count * 3
+
+	# Horizontal scoring
+	for r in range(6):
+		var row_array = []
+		for c in range(7):
+			row_array.append(grid[r * 7 + c])
+		for c in range(4):
+			var window = row_array.slice(c, c + 4)
+			score += _evaluate_window(window, piece)
+	# Vertical scoring
+	for c in range(7):
+		var col_array = []
+		for r in range(6):
+			col_array.append(grid[r * 7 + c])
+		for r in range(3):
+			var window = col_array.slice(r, r + 4)
+			score += _evaluate_window(window, piece)
+	# Positive sloped diagonal scoring
+	for r in range(3):
+		for c in range(4):
+			var window = []
+			for i in range(4):
+				window.append(grid[(r + i) * 7 + c + i])
+			score += _evaluate_window(window, piece)
+	# Negative sloped diagonal scoring
+	for r in range(3, 6):
+		for c in range(4):
+			var window = []
+			for i in range(4):
+				window.append(grid[(r - i) * 7 + c + i])
+			score += _evaluate_window(window, piece)
+	return score
+
+func _evaluate_window(window: Array, piece) -> int:
+	var score = 0
+	var opp_piece = 3 - piece
+
+	var count_piece = window.count(piece)
+	var count_opp = window.count(opp_piece)
+	var count_empty = window.count(0)
+
+	if count_piece == 4:
+		score += 100
+	elif count_piece == 3 and count_empty == 1:
+		score += 5
+	elif count_piece == 2 and count_empty == 2:
+		score += 2
+
+	if count_opp == 3 and count_empty == 1:
+		score -= 4
+	return score
+
+func print_board(grid_state: Array) -> void:
+	print("\n Current Board State:")
+	print("--------------------")
+	for row in range(5, -1, -1):  # Print from top to bottom
+		var row_str = "|"
+		for col in range(7):
+			var cell = grid_state[row * 7 + col]
+			var symbol = " "
+			if cell == 1:
+				symbol = "X"  # Player 1
+			elif cell == 2:
+				symbol = "O"  # Player 2
+			row_str += " " + symbol + " |"
+		print(row_str)
+	print("--------------------")
+	print("  1   2   3   4   5   6   7")  # Aligned column numbers
+	print()
