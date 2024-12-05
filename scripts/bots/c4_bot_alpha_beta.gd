@@ -2,7 +2,7 @@ extends Node
 
 const INF = 1e20  # A large number to represent infinity
 
-func c4_bot_alpha_beta(game_data: C4GameData):
+func c4_bot_alpha_beta(game_data: C4Data.C4GameData):
 	var depth = 5  # Adjust the depth for difficulty
 	var player = game_data.my_player_index + 1  # Player token (1 or 2)
 

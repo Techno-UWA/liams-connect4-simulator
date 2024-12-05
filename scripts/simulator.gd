@@ -17,11 +17,15 @@ const C4BotTooSlow = preload("res://scripts/bots/c4_bot_too_slow.gd")
 const C4BotSlow = preload("res://scripts/bots/c4_bot_slow.gd")
 const C4BotAlphaBeta = preload("res://scripts/bots/c4_bot_alpha_beta.gd")
 
+# Use C4Data classes
+const GameData = C4Data.C4GameData
+const Turn = C4Data.C4Turn
+
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	randomize()  # Initialize the random number generator
-	var bot_function_1 = Callable(C4BotAlphaBeta, "c4_bot_alpha_beta")  # Alpha-beta bot
-	var bot_function_2 = Callable(C4BotRandom, "c4_bot_random")      # Random bot
+	var bot_function_1 = Callable(C4BotAlphaBeta.new(), "c4_bot_alpha_beta")  # Alpha-beta bot
+	var bot_function_2 = Callable(C4BotRandom.new(), "c4_bot_random")      # Random bot
 	play_full_game(bot_function_1, bot_function_2)
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -111,38 +115,46 @@ func play_full_game(bot_function_1: Callable, bot_function_2: Callable):
 		var bot_function = bot_functions[active_player]
 		game_data.my_player_index = active_player
 		game_data.my_grid = C4GameData._change_slot_state_perspective(grid_state, active_player)
-
-		var turn_result = bot_function.call(game_data)
-
-		if turn_result:
+		
+		# Direct bot function call
+		var turn_result = await bot_function.call(game_data)
+		
+		if turn_result is Array and turn_result.size() == 2:
 			var selected_column = turn_result[0]
 			var message = turn_result[1]
-			var row = _get_next_available_row(grid_state, selected_column)
-			if row != -1:
-				grid_state[row * 7 + selected_column] = active_player + 1
-				game_data.grid = grid_state.duplicate()
-				game_data.game_history.append(C4Turn.new(active_player, selected_column, message, game_data))
-				emit_signal("game_state_changed", grid_state)
+			
+			if selected_column >= 0 and selected_column < 7:
+				var row = _get_next_available_row(grid_state, selected_column)
+				if row != -1:
+					grid_state[row * 7 + selected_column] = active_player + 1
+					game_data.grid = grid_state.duplicate()
+					game_data.game_history.append(C4Turn.new(active_player, selected_column, message, game_data))
+					emit_signal("game_state_changed", grid_state)
 
-				print("Player %d (%s) selects column %d and says: \"%s\"" %
-					[active_player + 1, player_names[active_player], selected_column + 1, message])
-				print_board(grid_state)  # Print board after each move
+					print("\nPlayer %d (%s) selects column %d and says: \"%s\"" %
+						[active_player + 1, player_names[active_player], selected_column + 1, message])
+					print_board(grid_state)
 
-				if check_win_condition(grid_state, active_player + 1):
-					print("Player %d (%s) wins!" % [active_player + 1, player_names[active_player]])
+					if check_win_condition(grid_state, active_player + 1):
+						print("\nPlayer %d (%s) wins!" % [active_player + 1, player_names[active_player]])
+						break
+
+					if check_draw_condition(grid_state):
+						print("\nThe game is a draw!")
+						break
+
+					active_player = 1 - active_player
+				else:
+					print("\nColumn %d is full. Player %d (%s) loses." % 
+						[selected_column + 1, active_player + 1, player_names[active_player]])
 					break
-
-				if check_draw_condition(grid_state):
-					print("The game is a draw!")
-					break
-
-				active_player = 1 - active_player
 			else:
-				print("Column %d is full. Player %d (%s) loses." %
-					[selected_column + 1, active_player + 1, player_names[active_player]])
+				print("\nInvalid column selected. Player %d (%s) loses." % 
+					[active_player + 1, player_names[active_player]])
 				break
 		else:
-			print("Player %d (%s) did not return a valid move." % [active_player + 1, player_names[active_player]])
+			print("\nInvalid move format. Player %d (%s) loses." % 
+				[active_player + 1, player_names[active_player]])
 			break
 
 func check_win_condition(grid_state: Array[int], player_token: int) -> bool:
@@ -186,53 +198,46 @@ func _get_next_available_row(grid_state: Array[int], column: int) -> int:
 	return -1
 
 class C4Turn:
-	var number: int #First player's first turn is 1, 2nd player's first turn is 2 etc.
-	var player_index: int #0 = first player, 1 = second player
-	var selection:int #The selected grid slot => -1 if an invalid slot was selected, -2 if they ran out of time otherwise 0 to 41(in normal 6x7 grid)
-	var message:String #The message given by the player, empty string if no response
-	var game_data:C4GameData #the data given to the player as part of their turn
-	var time_used_ms: int #the thinking time used by the turn
+	var player: int
+	var selection: int
+	var message: String
+	var provided_data: C4GameData
+	var time_used_ms: int
 
 	func _init(player_index: int, selected_column: int, chat_message: String, game_data: C4GameData):
-		player = player_index
-		selection = selected_column
-		message = chat_message
-		provided_data = game_data.duplicate()
+		self.player = player_index
+		self.selection = selected_column
+		self.message = chat_message
+		self.provided_data = game_data.duplicate()
 
-	# Add this duplicate method
 	func duplicate():
-		var new_turn = C4Turn.new(player, selection, message, provided_data.duplicate())
+		var new_turn = C4Turn.new(self.player, self.selection, self.message, self.provided_data)
 		return new_turn
 
 class C4GameData:
-	var columns:int #The number of columns of the grid
-	var rows: int #The number of rows of the grid
-	var required_connections: int #The number of connected tokens required to win (normally 4)
-	var allowed_time_ms: int #The total allowed thinking time for each player
+	var player_names: Array = ['Player 1']
+	var columns: int = 7
+	var rows: int = 6
+	var required_connections: int = 4
+	var allowed_time_ms: int = 10000
 	
-	var grid:Array[int] #Current game grid 0 = Empty, 1 = Player 1 token, 2 = Player 2 token. 0 is top left slot, goes left-right, top-bottom
-	var game_history: Array[C4Turn] #Array holding all the previous turns
-	var my_remaining_time_s:float #Your total remaining thinking time in s
-	var my_player_index:int #0 if first player, 1 if second player
-	var my_opponent_name: String #Your opponent's display name
-	var my_name: String #Your display name
-	var my_remaining_time_ms: int #Your total remaining thinking time in ms
+	var grid: Array[int]
+	var game_history: Array[C4Turn]
+	var my_remaining_time_s: float
+	var my_player_index: int = 1
+	var my_grid: Array[int]
+	var my_remaining_time_ms: int = 2000
 
-	var my_grid: Array[int] #Current game grid but changed to 0= empty, 1= your token, 2= your opponents tokken
-	var my_color:Color #Colour of your tokens
-	var my_opponent_color:Color #Colour of your opponents tokens
-
-	func _init(player_names: Array, grid_state: Array, first_turn):
-		self.player_names = player_names
+	func _init(names: Array, grid_state: Array, first_turn):
+		self.player_names = names
 		self.grid = grid_state.duplicate()
-		self.my_grid = []
+		self.my_grid = C4GameData._change_slot_state_perspective(grid_state, my_player_index)
 		self.game_history = []
 		if first_turn != null:
 			self.game_history.append(first_turn)
 
-	# Add this duplicate method
 	func duplicate():
-		var new_instance = C4GameData.new(player_names.duplicate(), grid.duplicate(), null)
+		var new_instance = C4GameData.new(self.player_names.duplicate(), self.grid.duplicate(), null)
 		new_instance.columns = columns
 		new_instance.rows = rows
 		new_instance.required_connections = required_connections
@@ -245,12 +250,12 @@ class C4GameData:
 			new_instance.game_history.append(turn.duplicate())
 		return new_instance
 
-	static func _change_slot_state_perspective(grid_state:Array[int], player_index:int):
-		var grid:Array[int] = []
+	static func _change_slot_state_perspective(grid_state: Array[int], player_index: int) -> Array[int]:
+		var grid: Array[int] = []
 		for slot in grid_state:
-			if player_index==0 or slot == 0:
+			if player_index == 0 or slot == 0:
 				grid.append(slot)
-			elif slot==1:
+			elif slot == 1:
 				grid.append(2)
 			else:
 				grid.append(1)
